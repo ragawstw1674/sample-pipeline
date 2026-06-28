@@ -1,4 +1,4 @@
-aws_region = "ap-south-1"
+region = "ap-south-1"
 
 instance_name = "dev-ec2"
 
