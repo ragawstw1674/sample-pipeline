@@ -5,8 +5,8 @@ resource "aws_instance" "this" {
   key_name               = var.key_name
   vpc_security_group_ids = var.security_group_ids
 
-  metadata_options  {
-    http_tokens     = "required"
+  metadata_options {
+    http_tokens = "required"
   }
 
   root_block_device {

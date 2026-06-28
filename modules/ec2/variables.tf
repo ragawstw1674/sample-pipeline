@@ -19,7 +19,7 @@ variable "ami_id" {
 }
 
 variable "subnet_id" {
-  type        = string
+  type = string
 }
 
 variable "security_group_ids" {
