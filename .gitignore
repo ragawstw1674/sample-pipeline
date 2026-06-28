@@ -1,0 +1,31 @@
+# Terraform
+**/.terraform/*
+**/.terraform.lock.hcl
+
+# State files
+*.tfstate
+*.tfstate.*
+
+# Plans
+*.out
+plan.out
+plan.txt
+
+# Logs
+crash.log
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Variable files
+*.auto.tfvars
+*.auto.tfvars.json
+
+# IDE
+.vscode/
+.idea/
+
+.env

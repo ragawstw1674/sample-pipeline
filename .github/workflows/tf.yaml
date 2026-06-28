@@ -1,0 +1,133 @@
+name: Terraform Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target Environment
+        type: choice
+        required: true
+        options:
+          - dev
+          - qa
+          - prod
+
+      module:
+        description: Terraform Module
+        type: choice
+        required: true
+        options:
+          - ec2
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.15.7"
+  TF_INPUT: "false"
+  TF_IN_AUTOMATION: "true"
+
+  MODULE_DIR: modules/${{ inputs.module }}
+
+concurrency:
+  group: terraform-${{ inputs.environment }}-${{ inputs.module }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Terraform Plan
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.MODULE_DIR }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: Terraform Format
+        run: terraform fmt -check -recursive
+
+      - name: Initialize TFLint
+        run: tflint --init
+
+      - name: Run TFLint
+        run: tflint
+
+      - name: Run Trivy vulnerability scanner in IaC mode
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'config'
+          hide-progress: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="../../backend/backend.hcl" \
+            -backend-config="key=${{ inputs.environment }}/${{ inputs.module }}/terraform.tfstate"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=plan.out -var-file="vars/${{ inputs.environment }}.tfvars" 
+
+      - name: Generate Plan Summary
+        run: terraform show -no-color plan.out > plan.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.MODULE_DIR }}/plan.out
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-summary
+          path: ${{ env.MODULE_DIR }}/plan.txt
+          retention-days: 1
+
+  apply:
+    name: Terraform Apply
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.MODULE_DIR }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="../../backend/backend.hcl" \
+            -backend-config="key=${{ inputs.environment }}/${{ inputs.module }}/terraform.tfstate"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.MODULE_DIR }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve plan.out
