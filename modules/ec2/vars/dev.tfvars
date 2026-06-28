@@ -10,7 +10,7 @@ subnet_id = "subnet-05267d29f73db2925"
 
 security_group_ids = []
 
-key_name = "dev-key"
+key_name = "mykey"
 
 tags = {
   Environment = "dev"
