@@ -1,0 +1,139 @@
+name: Build and Deploy to EKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target Environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+
+      aws_region:
+        description: AWS Region
+        required: true
+        type: string
+        default: ap-south-1
+
+      release_name:
+        description: Helm Release Name
+        required: true
+        type: string
+        default: myapp
+
+      namespace:
+        description: Kubernetes Namespace
+        required: true
+        type: string
+        default: default
+
+      chart_path:
+        description: Helm Chart Path
+        required: true
+        type: string
+        default: helm/myapp
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}-${{ inputs.release_name }}
+  cancel-in-progress: false
+
+jobs:
+
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_repository: ${{ steps.image.outputs.repository }}
+      image_tag: ${{ steps.image.outputs.tag }}
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate Image Metadata
+        id: image
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::8}
+          IMAGE_REPOSITORY=${{ steps.ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}
+
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "repository=$IMAGE_REPOSITORY" >> $GITHUB_OUTPUT
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t ${IMAGE_REPOSITORY}:${IMAGE_TAG} \
+            .
+        env:
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+
+      - name: Push Docker Image
+        run: |
+          docker push ${IMAGE_REPOSITORY}:${IMAGE_TAG}
+        env:
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+
+  deploy:
+    name: Deploy to Amazon EKS
+
+    needs: build
+
+    runs-on: ubuntu-latest
+
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}" \
+            --region "${{ inputs.aws_region }}"
+
+      - name: Helm Upgrade
+        run: |
+          helm upgrade \
+            --install "${{ inputs.release_name }}" \
+            "${{ inputs.chart_path }}" \
+            --namespace "${{ inputs.namespace }}" \
+            --create-namespace \
+            --atomic \
+            --wait \
+            --timeout 10m \
+            --history-max 10 \
+            --set image.repository="${{ needs.build.outputs.image_repository }}" \
+            --set image.tag="${{ needs.build.outputs.image_tag }}"
+
+      - name: Display Helm Release
+        run: |
+          helm status "${{ inputs.release_name }}" \
+            --namespace "${{ inputs.namespace }}"
